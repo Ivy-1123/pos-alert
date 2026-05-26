@@ -6,7 +6,7 @@ import io
 # --- 网页基础设置 ---
 st.set_page_config(page_title="VC POS 波动预警终极版", layout="wide", initial_sidebar_state="expanded")
 st.title("🚨 Amazon VC POS 销售波动预警报告系统")
-st.markdown("不仅提供全自动多维矩阵分析，更支持 **侧边栏全局多维联动筛选** 与 **一键导出完美格式 Excel 报表**。")
+st.markdown("严格对齐原始 md 规范，支持 7 指标全维监控、4-Tier 预警算法、侧边栏全局多选联动筛选。")
 
 # --- 核心辅助计算函数 ---
 def safe_float(val):
@@ -186,31 +186,24 @@ if uploaded_file is not None:
                 
             df_child_master = pd.DataFrame(child_list)
 
-            # ==================== 🎛️ 侧边栏：交互式动态筛选引擎 ====================
+            # ==================== 🎛️ 侧边栏筛选引擎 ====================
             st.sidebar.header("🔍 数据多维侧边栏过滤")
-            st.sidebar.markdown("支持多项选择，不选即为查看全部数据。")
-            
-            # 获取去重后的 OM 和 Pattern 列表
             om_options = sorted([str(x) for x in df_child_master['OM'].unique() if pd.notna(x) and str(x).strip() != ''])
             pattern_options = sorted([str(x) for x in df_child_master['Pattern'].unique() if pd.notna(x) and str(x).strip() != ''])
             
-            # 渲染多选框
             selected_oms = st.sidebar.multiselect("👨‍💼 筛选负责团队 (OM)", options=om_options, default=None, placeholder="选择 OM (支持多选)...")
             selected_patterns = st.sidebar.multiselect("🎨 筛选产品款式 (Pattern)", options=pattern_options, default=None, placeholder="选择款式 (支持多选)...")
             
-            # 执行交叉过滤逻辑
             if selected_oms:
                 df_child_master = df_child_master[df_child_master['OM'].astype(str).isin(selected_oms)]
             if selected_patterns:
                 df_child_master = df_child_master[df_child_master['Pattern'].astype(str).isin(selected_patterns)]
             
-            # 如果过滤后数据空了，提前中止并提醒
             if df_child_master.empty:
-                st.warning("⚠️ 在当前的 OM 或 Pattern 筛选组合下，没有匹配到任何数据，请在左侧栏调整您的筛选项。")
+                st.warning("⚠️ 没有匹配到任何数据，请在左侧栏调整您的多选项。")
                 st.stop()
-            # ======================================================================
+            # ==========================================================
 
-            # --- 继续生成切片后的报表数据 ---
             s2_s3_rows = []
             for idx, r in df_child_master.iterrows():
                 s2_s3_rows.append({
@@ -279,6 +272,17 @@ if uploaded_file is not None:
             
             df_s4_top50 = df_s5_alert.head(50).copy()
 
+            # 统计不同级别数量 (用于 Sheet 1 的仪表盘)
+            h_c = len(df_child_master[df_child_master['预警层级'].str.contains('🔴', na=False)])
+            m_c = len(df_child_master[df_child_master['预警层级'].str.contains('⚠️', na=False)])
+            l_c = len(df_child_master[df_child_master['预警层级'].str.contains('⚪', na=False)])
+            i_c = len(df_child_master[df_child_master['预警层级'].str.contains('ℹ️', na=False)])
+            
+            hp_c = len(df_s5_alert[df_s5_alert['预警层级'].str.contains('🔴', na=False)])
+            mp_c = len(df_s5_alert[df_s5_alert['预警层级'].str.contains('⚠️', na=False)])
+            lp_c = len(df_s5_alert[df_s5_alert['预警层级'].str.contains('⚪', na=False)])
+            ip_c = len(df_s5_alert[df_s5_alert['预警层级'].str.contains('ℹ️', na=False)])
+
             s6_records = []
             if len(sorted_dates) >= 14:
                 w2_days, w1_days = sorted_dates[:7], sorted_dates[7:14]  
@@ -336,7 +340,7 @@ if uploaded_file is not None:
             else:
                 df_s6_top50 = pd.DataFrame([{'提示': '历史数据不足14天，周环比隐藏'}])
 
-            # ==================== 🎨 样式渲染引擎 (修复了一刀切红色的问题) ====================
+            # ==================== 🎨 样式渲染引擎 ====================
             def apply_matrix_styles(df):
                 def fmt_arrow(v):
                     if pd.isna(v): return "0"
@@ -364,7 +368,6 @@ if uploaded_file is not None:
                 def row_painter(row):
                     colors = [''] * len(row)
                     for i, col_name in enumerate(row.index):
-                        # 1. 仅在“预警层级”这一个单元格上应用红绿高亮，不再强制涂满整行
                         if col_name == '预警层级':
                             val_str = str(row[col_name])
                             if '🔴' in val_str or 'High' in val_str or '暴跌' in val_str:
@@ -377,7 +380,6 @@ if uploaded_file is not None:
                                 colors[i] = 'background-color: #DDEBF7; color: #004E82'
                             continue
                             
-                        # 2. 其他指标列保留其专属的清爽底色区块
                         if '销量' in col_name: colors[i] = 'background-color: #DDEBF7;'
                         elif 'GV' in col_name: colors[i] = 'background-color: #E2EFDA;'
                         elif '价格' in col_name or '单价' in col_name: colors[i] = 'background-color: #FFF2CC;'
@@ -385,7 +387,6 @@ if uploaded_file is not None:
                         elif 'SPSD' in col_name or 'SBDSP' in col_name: colors[i] = 'background-color: #E9D7F3;'
                         elif 'TACOS' in col_name: colors[i] = 'background-color: #EDEDED;'
                         
-                        # 3. 单独给所有波动/趋势列的字体加上红绿颜色 (正负反转逻辑保留)
                         if '波动' in col_name or '变化' in col_name or '趋势' in col_name:
                             v = row[col_name]
                             if isinstance(v, (int, float)) and v != 0:
@@ -397,15 +398,27 @@ if uploaded_file is not None:
                 
                 return df.style.apply(row_painter, axis=1).format(fmt_dict)
 
+            # 生成网页专属 Styler 样式化对象
             styler_s2 = apply_matrix_styles(df_top50_s2)
             styler_s3 = apply_matrix_styles(df_s3_alert)
             styler_s4 = apply_matrix_styles(df_s4_top50)
             styler_s5 = apply_matrix_styles(df_s5_alert)
             styler_s6 = df_s6_top50 if '提示' in df_s6_top50.columns else apply_matrix_styles(df_s6_top50)
 
+            # 构建 Sheet 1 的仪表盘摘要结构体
+            summary_table = pd.DataFrame([
+                {'预警等级': '🔴 第一层 (High)', '核心判定条件说明': '高销量关键产品日销量大幅突变，平均销量≥10 且 波动绝对值≥15件', '已筛选子ASIN数': f"{h_c} 个", '已筛选父ASIN数': f"{hp_c} 个"},
+                {'预警等级': '⚠️ 第二层 (Medium)', '核心判定条件说明': '中等销量产品剧烈震荡波动，3≤平均销量<10 且 销量环比涨跌变化率≥60%', '已筛选子ASIN数': f"{m_c} 个", '已筛选父ASIN数': f"{mp_c} 个"},
+                {'预警等级': '⚪ 第三层 (Low)', '核心判定条件说明': '历史活跃单品突然无迹象彻底归零预警，L30D日均销≥3 且 前日销量≥3 且 昨日销量=0', '已筛选子ASIN数': f"{l_c} 个", '已筛选父ASIN数': f"{lp_c} 个"},
+                {'预警等级': 'ℹ️ 第四层 (Info)', '核心判定条件说明': '单品断货入仓或被限制后重新起死回生恢复预警，前日销量=0 且 昨日销量快速反弹≥3', '已筛选子ASIN数': f"{i_c} 个", '已筛选父ASIN数': f"{ip_c} 个"}
+            ])
+
             # ==================== 📥 内存打包生成可下载的带有全部样式的 Excel ====================
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # 写入 Sheet 1 纯文本说明
+                summary_table.to_excel(writer, sheet_name='预警摘要说明', index=False)
+                # 写入带样式的其他核心 Sheet
                 styler_s2.to_excel(writer, sheet_name='子ASIN_TOP50', index=False)
                 styler_s3.to_excel(writer, sheet_name='子ASIN_全波动', index=False)
                 styler_s4.to_excel(writer, sheet_name='父ASIN_TOP50', index=False)
@@ -418,24 +431,68 @@ if uploaded_file is not None:
             excel_data = output.getvalue()
             
             # --- 渲染顶部醒目的下载按钮 ---
-            st.success(f"✅ 完美！您当前所见的【已筛选数据】和【颜色矩阵】已打包就绪。")
+            st.success(f"✅ 多维联动过滤已就绪！数据刷新完毕。")
             st.download_button(
-                label="📥 一键导出完美样式 Excel (包含您选择的筛选条件)",
+                label="📥 点击这里一键导出带红绿样式的全套 Excel 报表 (.xlsx)",
                 data=excel_data,
-                file_name=f"VC_多维预警切片_{latest_d}.xlsx",
+                file_name=f"VC_多维联动切割报告_{latest_d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary"
             )
 
-            # --- 渲染网页 UI Tabs ---
-            tabs = st.tabs(["🥇 Sheet 2: 子ASIN-TOP50", "🛒 Sheet 3: 子ASIN-全波动", "🏅 Sheet 4: 父ASIN-TOP50", "📦 Sheet 5: 父ASIN-全波动", "🗓️ Sheet 6: 父ASIN-周波动"])
+            # --- 渲染网页 UI Tabs (重磅！把 6 个 Sheet 完全归位) ---
+            tabs = st.tabs([
+                "📋 Sheet 1: 预警摘要说明",
+                "🥇 Sheet 2: 子ASIN-TOP50", 
+                "🛒 Sheet 3: 子ASIN-全波动", 
+                "🏅 Sheet 4: 父ASIN-TOP50", 
+                "📦 Sheet 5: 父ASIN-全波动", 
+                "🗓️ Sheet 6: 父ASIN-周波动"
+            ])
             
-            with tabs[0]: st.dataframe(styler_s2, use_container_width=True, height=550)
-            with tabs[1]: st.dataframe(styler_s3, use_container_width=True, height=550)
-            with tabs[2]: st.dataframe(styler_s4, use_container_width=True, height=550)
-            with tabs[3]: st.dataframe(styler_s5, use_container_width=True, height=550)
-            with tabs[4]: 
-                if '提示' in df_s6_top50.columns: st.info("历史数据横向不足 14 天，周滚动环比隐藏。")
+            # --- Tab 1: 渲染预警摘要说明书 ---
+            with tabs[0]:
+                st.subheader("📋 Amazon VC POS 销售波动监控仪表盘总览")
+                st.table(summary_table)
+                
+                c_inf1, c_inf2 = st.columns(2)
+                with c_inf1:
+                    st.info("""
+                    **二、大盘底层数据清洗漏斗规则 (已生效)**
+                    * 自动剔除 `Retail Status` 为 *Discontinued / Temp Discontinued* 的过时死链接。
+                    * 自动剔除部门代号 (`Division`) 为 *FUR, LGT, ART, APL, PET, PETB* 的非核心业务家具宠物线。
+                    * 自动过滤 `OM` 标记为 *discontinued* 的产品。
+                    """)
+                    st.warning("""
+                    **三、Revenue Impact 营收震荡系数级别定义**
+                    * 计算公式：`销量每日净波动 × 昨日单价`
+                    * **S级影响**：单日震荡金额绝对值 ≥ $5000 (战略级波动)
+                    * **A级影响**：$1000 - $5000 (高震荡)
+                    * **B级影响**：$500 - $1000 (中等异动)
+                    * **C级影响**：$100 - $500 (低度异动)
+                    """)
+                with c_inf2:
+                    st.success("""
+                    **四、CVR 转化率矩阵良性/恶性走势诊断**
+                    * 🟢 良性：`CVR ↑ + 销量 ↑` ➔ 关键词排名自然破圈，流量高度匹配。
+                    * 🟡 监控：`CVR ↓ + 销量 ↑` ➔ 处于降价、大促清仓阶段，需严防毛利穿底。
+                    * 🔴 警戒：`CVR ↓ + 销量 ↓` ➔ 产品转化核心爆雷、或遭遇海量差评，须立即抢修 Listing！
+                    """)
+                    st.error("""
+                    **五、TACOS (总广告开销占销售额比) 毛利警示线**
+                    * 计算公式：`SPSD广告开销 / 对应单品总营收 × 100%`
+                    * 🟢 优异效率：TACOS < 2%
+                    * 🟡 正常开销：2% ≤ TACOS < 5%
+                    * 🔴 亟需调价：TACOS ≥ 5%（广告疯狂烧钱空转，建议立刻降CPC或限流）
+                    """)
+
+            # --- Tab 2 到 6: 渲染带有精细列底色和箭头的 Styler 矩阵 ---
+            with tabs[1]: st.dataframe(styler_s2, use_container_width=True, height=550)
+            with tabs[2]: st.dataframe(styler_s3, use_container_width=True, height=550)
+            with tabs[3]: st.dataframe(styler_s4, use_container_width=True, height=550)
+            with tabs[4]: st.dataframe(styler_s5, use_container_width=True, height=550)
+            with tabs[5]: 
+                if '提示' in df_s6_top50.columns: st.info("历史横向数据天数不足 14 天，周滚动环比自动隐藏。")
                 else: st.dataframe(styler_s6, use_container_width=True, height=550)
 
         except Exception as e:
