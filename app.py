@@ -4,9 +4,9 @@ import numpy as np
 import io
 
 # --- 网页基础设置 ---
-st.set_page_config(page_title="VC POS 波动预警终极版", layout="wide")
+st.set_page_config(page_title="VC POS 波动预警终极版", layout="wide", initial_sidebar_state="expanded")
 st.title("🚨 Amazon VC POS 销售波动预警报告系统")
-st.markdown("不仅提供全自动多维矩阵分析，更支持 **一键导出带有指标专属底色与趋势箭头的 Excel 报表**，无缝衔接本地数据操作。")
+st.markdown("不仅提供全自动多维矩阵分析，更支持 **侧边栏全局多维联动筛选** 与 **一键导出完美格式 Excel 报表**。")
 
 # --- 核心辅助计算函数 ---
 def safe_float(val):
@@ -57,7 +57,7 @@ def build_driving_factors_text(s_chg, g_chg, p_chg, c_chg, sp_chg, tc_chg):
 uploaded_file = st.file_uploader("📂 请上传原始 VC ASIN 复合数据表 (支持 xlsx 或 csv)", type=['xlsx', 'csv'])
 
 if uploaded_file is not None:
-    with st.spinner('🔥 正在进行多表清洗、样式封装及 Excel 报表构建...'):
+    with st.spinner('🔥 正在进行多表清洗、多维过滤封装及 Excel 报表构建...'):
         try:
             if uploaded_file.name.endswith('.csv'):
                 raw_df = pd.read_csv(uploaded_file, header=None, low_memory=False)
@@ -185,12 +185,37 @@ if uploaded_file is not None:
                 })
                 
             df_child_master = pd.DataFrame(child_list)
+
+            # ==================== 🎛️ 侧边栏：交互式动态筛选引擎 ====================
+            st.sidebar.header("🔍 数据多维侧边栏过滤")
+            st.sidebar.markdown("支持多项选择，不选即为查看全部数据。")
             
+            # 获取去重后的 OM 和 Pattern 列表
+            om_options = sorted([str(x) for x in df_child_master['OM'].unique() if pd.notna(x) and str(x).strip() != ''])
+            pattern_options = sorted([str(x) for x in df_child_master['Pattern'].unique() if pd.notna(x) and str(x).strip() != ''])
+            
+            # 渲染多选框
+            selected_oms = st.sidebar.multiselect("👨‍💼 筛选负责团队 (OM)", options=om_options, default=None, placeholder="选择 OM (支持多选)...")
+            selected_patterns = st.sidebar.multiselect("🎨 筛选产品款式 (Pattern)", options=pattern_options, default=None, placeholder="选择款式 (支持多选)...")
+            
+            # 执行交叉过滤逻辑
+            if selected_oms:
+                df_child_master = df_child_master[df_child_master['OM'].astype(str).isin(selected_oms)]
+            if selected_patterns:
+                df_child_master = df_child_master[df_child_master['Pattern'].astype(str).isin(selected_patterns)]
+            
+            # 如果过滤后数据空了，提前中止并提醒
+            if df_child_master.empty:
+                st.warning("⚠️ 在当前的 OM 或 Pattern 筛选组合下，没有匹配到任何数据，请在左侧栏调整您的筛选项。")
+                st.stop()
+            # ======================================================================
+
+            # --- 继续生成切片后的报表数据 ---
             s2_s3_rows = []
             for idx, r in df_child_master.iterrows():
                 s2_s3_rows.append({
                     'Parent ASIN': r['Parent ASIN'], 'ASIN': r['ASIN'], 'ItemNo': r['ItemNo'], 'Division': r['Division'], 'Brand': r['Brand'],
-                    'OM': r['OM'], 'ProductTag': r['ProductTag'], 'Retail Status': r['Retail Status'], 'L30D销量均值': int(r['L30D销量均值']),
+                    'OM': r['OM'], 'Pattern': r['Pattern'], 'ProductTag': r['ProductTag'], 'Retail Status': r['Retail Status'], 'L30D销量均值': int(r['L30D销量均值']),
                     '销量_Day1': int(r['units_p']), '销量_Day2': int(r['units_l']), '销量变化': int(r['units_l'] - r['units_p']), '销量变化率': (r['units_l'] - r['units_p'])/r['units_p'] if r['units_p'] > 0 else 0.0,
                     'GV_Day1': int(r['gv_p']), 'GV_Day2': int(r['gv_l']), 'GV变化': int(r['gv_l'] - r['gv_p']), 'GV变化率': (r['gv_l'] - r['gv_p'])/r['gv_p'] if r['gv_p'] > 0 else 0.0,
                     '价格_Day1': r['price_p'], '价格_Day2': r['price_l'], '价格变化': r['price_l'] - r['price_p'], '价格变化率': (r['price_l'] - r['price_p'])/r['price_p'] if r['price_p'] > 0 else 0.0,
@@ -208,7 +233,7 @@ if uploaded_file is not None:
             df_top50_s2 = df_s3_alert.head(50).copy()
             
             parent_group = df_child_master.groupby('Parent ASIN').agg({
-                'ASIN': 'nunique', 'Division': 'first', 'Brand': 'first', 'OM': 'first', 'ProductTag': 'first', 'Retail Status': 'first',
+                'ASIN': 'nunique', 'Division': 'first', 'Brand': 'first', 'Pattern': 'first', 'OM': 'first', 'ProductTag': 'first', 'Retail Status': 'first',
                 'L30D销量均值': 'sum', 'units_p': 'sum', 'units_l': 'sum', 'gv_p': 'sum', 'gv_l': 'sum',
                 'rev_p': 'sum', 'rev_l': 'sum', 'spsd_p': 'sum', 'spsd_l': 'sum', 'sbdsp_p': 'sum', 'sbdsp_l': 'sum'
             }).reset_index()
@@ -236,7 +261,7 @@ if uploaded_file is not None:
                 
                 parent_list.append({
                     'Parent ASIN': row['Parent ASIN'], 'ASIN count': int(row['ASIN']), 'Division': row['Division'], 'Brand': row['Brand'],
-                    'OM': row['OM'], 'ProductTag': row['ProductTag'], 'Retail Status': row['Retail Status'], 'L30D销量均值': int(row['L30D销量均值']),
+                    'OM': row['OM'], 'Pattern': row['Pattern'], 'ProductTag': row['ProductTag'], 'Retail Status': row['Retail Status'], 'L30D销量均值': int(row['L30D销量均值']),
                     '销量_Day1': int(u_p), '销量_Day2': int(u_l), '销量变化': int(p_change), '销量变化率': p_change/u_p if u_p > 0 else 0.0, 
                     'GV_Day1': int(gv_p), 'GV_Day2': int(gv_l), 'GV变化': int(gv_l - gv_p), 'GV变化率': (gv_l - gv_p)/gv_p if gv_p > 0 else 0.0, 
                     '价格_Day1': pr_p, '价格_Day2': pr_l, '价格变化': pr_l - pr_p, '价格变化率': (pr_l - pr_p)/pr_p if pr_p > 0 else 0.0, 
@@ -296,7 +321,7 @@ if uploaded_file is not None:
                     w_alert = '🔴 周销量暴跌' if (w_pct <= -0.30 and w1_units > 20) else ('🚀 周销量暴涨' if w_pct >= 0.30 else '正常')
                     
                     s6_records.append({
-                        'Parent ASIN': p_asin, 'ASIN count': int(p_row['ASIN']), 'Division': p_row['Division'], 'Brand': p_row['Brand'], 'OM': p_row['OM'],
+                        'Parent ASIN': p_asin, 'ASIN count': int(p_row['ASIN']), 'Division': p_row['Division'], 'Brand': p_row['Brand'], 'OM': p_row['OM'], 'Pattern': p_row['Pattern'],
                         '销量_W1': int(w1_units), '销量_W2': int(w2_units), '销量变化': int(w_units_diff), '销量变化率': w_pct,
                         'GV_W1': int(w1_gv), 'GV_W2': int(w2_gv), 'GV变化': int(w2_gv - w1_gv), 'GV变化率': (w2_gv - w1_gv)/w1_gv if w1_gv > 0 else 0.0,
                         '价格_W1': w1_price, '价格_W2': w2_price, '价格变化': w2_price - w1_price, '价格变化率': (w2_price - w1_price)/w1_price if w1_price > 0 else 0.0,
@@ -311,7 +336,7 @@ if uploaded_file is not None:
             else:
                 df_s6_top50 = pd.DataFrame([{'提示': '历史数据不足14天，周环比隐藏'}])
 
-            # ==================== 🎨 构建带有样式的 Styler 对象 ====================
+            # ==================== 🎨 样式渲染引擎 (修复了一刀切红色的问题) ====================
             def apply_matrix_styles(df):
                 def fmt_arrow(v):
                     if pd.isna(v): return "0"
@@ -339,7 +364,7 @@ if uploaded_file is not None:
                 def row_painter(row):
                     colors = [''] * len(row)
                     for i, col_name in enumerate(row.index):
-                        # 【核心修正】：只给“预警层级”这一列单元格上高亮，不再强制覆盖整行
+                        # 1. 仅在“预警层级”这一个单元格上应用红绿高亮，不再强制涂满整行
                         if col_name == '预警层级':
                             val_str = str(row[col_name])
                             if '🔴' in val_str or 'High' in val_str or '暴跌' in val_str:
@@ -352,15 +377,15 @@ if uploaded_file is not None:
                                 colors[i] = 'background-color: #DDEBF7; color: #004E82'
                             continue
                             
-                        # 给其它业务指标分配其专属的柔和底色（原封不动保留）
+                        # 2. 其他指标列保留其专属的清爽底色区块
                         if '销量' in col_name: colors[i] = 'background-color: #DDEBF7;'
                         elif 'GV' in col_name: colors[i] = 'background-color: #E2EFDA;'
-                        elif '价格' in col_name: colors[i] = 'background-color: #FFF2CC;'
+                        elif '价格' in col_name or '单价' in col_name: colors[i] = 'background-color: #FFF2CC;'
                         elif 'CVR' in col_name: colors[i] = 'background-color: #FCE4D6;'
                         elif 'SPSD' in col_name or 'SBDSP' in col_name: colors[i] = 'background-color: #E9D7F3;'
                         elif 'TACOS' in col_name: colors[i] = 'background-color: #EDEDED;'
                         
-                        # 波动文字和箭头的红绿配色（费用反转逻辑保留）
+                        # 3. 单独给所有波动/趋势列的字体加上红绿颜色 (正负反转逻辑保留)
                         if '波动' in col_name or '变化' in col_name or '趋势' in col_name:
                             v = row[col_name]
                             if isinstance(v, (int, float)) and v != 0:
@@ -372,14 +397,13 @@ if uploaded_file is not None:
                 
                 return df.style.apply(row_painter, axis=1).format(fmt_dict)
 
-            # 生成样式化对象
             styler_s2 = apply_matrix_styles(df_top50_s2)
             styler_s3 = apply_matrix_styles(df_s3_alert)
             styler_s4 = apply_matrix_styles(df_s4_top50)
             styler_s5 = apply_matrix_styles(df_s5_alert)
             styler_s6 = df_s6_top50 if '提示' in df_s6_top50.columns else apply_matrix_styles(df_s6_top50)
 
-            # ==================== 📥 内存打包生成可下载的样式 Excel ====================
+            # ==================== 📥 内存打包生成可下载的带有全部样式的 Excel ====================
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 styler_s2.to_excel(writer, sheet_name='子ASIN_TOP50', index=False)
@@ -394,11 +418,11 @@ if uploaded_file is not None:
             excel_data = output.getvalue()
             
             # --- 渲染顶部醒目的下载按钮 ---
-            st.success(f"✅ 计算完成！已为您生成多维样式分析报告。对比周期: **{prev_d}** 🆚 **{latest_d}**")
+            st.success(f"✅ 完美！您当前所见的【已筛选数据】和【颜色矩阵】已打包就绪。")
             st.download_button(
-                label="📥 点击这里下载带有完整颜色的 Excel 预警报告 (.xlsx)",
+                label="📥 一键导出完美样式 Excel (包含您选择的筛选条件)",
                 data=excel_data,
-                file_name=f"VC_预警极速报告_{latest_d}.xlsx",
+                file_name=f"VC_多维预警切片_{latest_d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary"
             )
