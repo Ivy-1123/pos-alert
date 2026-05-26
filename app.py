@@ -18,18 +18,14 @@ def safe_float(val):
 
 # 1. 严格复刻 4-Tier 预警算法
 def get_alert_tier_info(avg_sales, sales_change, sales_prev, sales_latest, l30d_avg):
-    # 第一层：高销量产品大幅突变
     if avg_sales >= 10 and abs(sales_change) >= 15:
         return '🔴 High', f'高销量产品大幅突变: 平均销量{avg_sales:.0f}≥10且变化{abs(sales_change):.0f}≥15件'
-    # 第二层：中销量产品大幅波动
     if 3 <= avg_sales < 10 and sales_prev > 0:
         change_rate = abs(sales_change) / sales_prev
         if change_rate >= 0.60:
             return '⚠️ Medium', f'中销量产品大幅波动: 平均销量{avg_sales:.1f}在3-10且变化率{change_rate:.1%}≥60%'
-    # 第三层：活跃链接归零预警
     if l30d_avg >= 3 and sales_prev >= 3 and sales_latest == 0:
         return '⚪ Low', f'活跃链接归零预警: L30D≥3且前日{sales_prev:.0f}≥3且昨日归零'
-    # 第四层：归零后恢复预警
     if sales_prev == 0 and sales_latest >= 3:
         return 'ℹ️ Info', f'归零后恢复预警: 前日归零但昨日恢复至{sales_latest:.0f}≥3'
     return None, '正常'
@@ -47,7 +43,6 @@ def get_revenue_impact_level(impact_val):
 def get_trend_symbol(val_day2, val_day1, is_pct=False):
     diff = val_day2 - val_day1
     if is_pct:
-        # 针对百分比指标，波动绝对值超 0.1% 认定为有趋势
         if diff > 0.001: return '↑'
         elif diff < -0.001: return '↓'
         return '→'
@@ -67,16 +62,13 @@ uploaded_file = st.file_uploader("📂 请上传原始 VC ASIN 复合数据表 (
 if uploaded_file is not None:
     with st.spinner('🔥 正在清洗噪音、横向探测 7 组核心偏移量并处理 14 天周滚动趋势...'):
         try:
-            # 1. 载入原始大表
             if uploaded_file.name.endswith('.csv'):
                 raw_df = pd.read_csv(uploaded_file, header=None, low_memory=False)
             else:
                 raw_df = pd.read_excel(uploaded_file, header=None)
             
-            # 向下填充 Parent ASIN (第0列)
             raw_df.iloc[:, 0] = raw_df.iloc[:, 0].ffill()
             
-            # 2. 多行复合表头深度定位
             date_row = raw_df.iloc[0, :]
             sub_header_row = raw_df.iloc[1, :]
             
@@ -115,7 +107,6 @@ if uploaded_file is not None:
                 
             latest_d, prev_d = sorted_dates[0], sorted_dates[1]
             
-            # --- 3. 纵向漏斗清洗 ---
             cleaned_rows = []
             for idx, row in raw_df.iloc[2:].iterrows():
                 parent_asin = str(row.iloc[0]).strip()
@@ -137,7 +128,6 @@ if uploaded_file is not None:
                 st.warning("⚠️ 经过过滤条件执行后，未留下任何有效 ASIN 产品明细！")
                 st.stop()
 
-            # --- 4. 子 ASIN 基础数据建模与多指标横向扫描计算 ---
             child_list = []
             for row in cleaned_rows:
                 parent_asin = str(row.iloc[0]).strip()
@@ -204,7 +194,6 @@ if uploaded_file is not None:
                 
             df_child_master = pd.DataFrame(child_list)
             
-            # --- 5. 核心输出组件分流 ---
             h_c = len(df_child_master[df_child_master['预警层级'].str.contains('🔴', na=False)])
             m_c = len(df_child_master[df_child_master['预警层级'].str.contains('⚠️', na=False)])
             l_c = len(df_child_master[df_child_master['预警层级'].str.contains('⚪', na=False)])
@@ -233,7 +222,6 @@ if uploaded_file is not None:
             
             df_top50_s2 = df_s3_alert.head(50).copy()
             
-            # --- 6. 父 ASIN 级多要素矩阵聚合 ---
             parent_group = df_child_master.groupby('Parent ASIN').agg({
                 'ASIN': 'nunique', 'Division': 'first', 'Brand': 'first', 'Category': 'first', 'Subcategory': 'first',
                 'Pattern': 'first', 'OM': 'first', 'BucketsList': 'first', 'ProductTag': 'first', 'Retail Status': 'first',
@@ -292,7 +280,6 @@ if uploaded_file is not None:
             lp_c = len(df_s5_alert[df_s5_alert['预警层级'].str.contains('⚪', na=False)])
             ip_c = len(df_s5_alert[df_s5_alert['预警层级'].str.contains('ℹ️', na=False)])
 
-            # ==================== SHEET 6: 父 ASIN - Weekly 波动预警 ====================
             s6_records = []
             if len(sorted_dates) >= 14:
                 w2_days = sorted_dates[:7]   
@@ -369,6 +356,7 @@ if uploaded_file is not None:
             # ==================== 🎨 像素级高阶红绿排版渲染引擎 ====================
             def apply_matrix_styles(styled_obj, is_weekly=False):
                 def fmt_arrow(v):
+                    if pd.isna(v): return "0"
                     if isinstance(v, (int, float)):
                         if v > 0: return f"▲ +{int(v) if v.is_integer() else round(v,2)}"
                         elif v < 0: return f"▼ {int(v) if v.is_integer() else round(v,2)}"
@@ -376,6 +364,7 @@ if uploaded_file is not None:
                     return str(v)
                 
                 def fmt_arrow_pct(v):
+                    if pd.isna(v): return "0.0%"
                     if isinstance(v, (int, float)):
                         if v > 0: return f"▲ +{round(v*100, 1)}%"
                         elif v < 0: return f"▼ {round(v*100, 1)}%"
@@ -413,7 +402,8 @@ if uploaded_file is not None:
                                     colors[i] += 'color: #00B050; font-weight: bold;' if v > 0 else 'color: #FF0000; font-weight: bold;'
                     return colors
                 
-                return styled_obj.apply(row_painter, axis=1).format(fmt_dict)
+                # 【修改点】：补上了至关重要的 .style
+                return styled_obj.style.apply(row_painter, axis=1).format(fmt_dict)
 
             # --- 7. 渲染网页 Tabs ---
             st.success(f"✅ 7大核心财务与流量指标矩阵渲染成功！对比周期: **{prev_d}** 🆚 **{latest_d}**")
