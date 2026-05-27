@@ -32,14 +32,6 @@ def get_alert_tier_info(avg_sales, sales_change, sales_prev, sales_latest, l30d_
         return 'ℹ️ Info', f'归零后恢复: 前日=0且昨日恢复至{sales_latest:.0f}≥3'
     return None, '正常'
 
-def get_revenue_impact_level(impact_val):
-    impact_abs = abs(impact_val)
-    if impact_abs >= 5000: return 'S'
-    elif impact_abs >= 1000: return 'A'
-    elif impact_abs >= 500:  return 'B'
-    elif impact_abs >= 100:  return 'C'
-    return 'D'
-
 def get_trend_symbol(val_day2, val_day1, is_pct=False):
     diff = val_day2 - val_day1
     if is_pct:
@@ -118,8 +110,7 @@ def load_and_parse_data(file_bytes, file_name):
             elif 'spsd' in sub_val or 'sp spend' in sub_val: date_blocks[current_date]['spsd'] = col_idx
             elif 'sbdsp' in sub_val or 'sb spend' in sub_val: date_blocks[current_date]['sbdsp'] = col_idx
             elif 'cvr' in sub_val or 'conversion rate' in sub_val: date_blocks[current_date]['cvr'] = col_idx
-            elif 'tacos' in sub_val: date_blocks[current_date]['tacos'] = col_idx
-            elif 'revenue' in sub_val or 'sales' in sub_val: date_blocks[current_date]['revenue'] = col_idx
+            elif 'revenue' in sub_val or 'sales' in sub_val or 'ordered revenue' in sub_val: date_blocks[current_date]['revenue'] = col_idx
 
     sorted_dates = sorted(unique_dates, reverse=True)
     if len(sorted_dates) < 2:
@@ -146,36 +137,44 @@ def load_and_parse_data(file_bytes, file_name):
         return None, None, None, "⚠️ 过滤后未留下任何有效明细！"
 
     child_list = []
+    
+    def get_val(r, block, key):
+        if key in block: return safe_float(r.iloc[block[key]])
+        return 0.0
+        
     for row in cleaned_rows:
         b_l = date_blocks[latest_d]
         b_p = date_blocks[prev_d]
         
-        u_l = safe_float(row.iloc[b_l['units']])
-        u_p = safe_float(row.iloc[b_p['units']])
-        gv_l = safe_float(row.iloc[b_l.get('gv', b_l['units'])])
-        gv_p = safe_float(row.iloc[b_p.get('gv', b_p['units'])])
-        pr_l = safe_float(row.iloc[b_l.get('price', b_l['units'])])
-        pr_p = safe_float(row.iloc[b_p.get('price', b_p['units'])])
-        sp_l = safe_float(row.iloc[b_l.get('spsd', b_l['units'])])
-        sp_p = safe_float(row.iloc[b_p.get('spsd', b_p['units'])])
-        sb_l = safe_float(row.iloc[b_l.get('sbdsp', b_l['units'])])
-        sb_p = safe_float(row.iloc[b_p.get('sbdsp', b_p['units'])])
-        cv_l = safe_float(row.iloc[b_l.get('cvr', b_l['units'])])
-        cv_p = safe_float(row.iloc[b_p.get('cvr', b_p['units'])])
-        tc_l = safe_float(row.iloc[b_l.get('tacos', b_l['units'])])
-        tc_p = safe_float(row.iloc[b_p.get('tacos', b_p['units'])])
-        rev_p = safe_float(row.iloc[b_p.get('revenue', b_p['units'])])
+        u_l = get_val(row, b_l, 'units')
+        u_p = get_val(row, b_p, 'units')
+        gv_l = get_val(row, b_l, 'gv')
+        gv_p = get_val(row, b_p, 'gv')
+        rev_l = get_val(row, b_l, 'revenue')
+        rev_p = get_val(row, b_p, 'revenue')
         
-        hist_units = [safe_float(row.iloc[date_blocks[d]['units']]) for d in sorted_dates[:30] if 'units' in date_blocks[d]]
+        sp_l = get_val(row, b_l, 'spsd')
+        sp_p = get_val(row, b_p, 'spsd')
+        sb_l = get_val(row, b_l, 'sbdsp')
+        sb_p = get_val(row, b_p, 'sbdsp')
+        
+        # 强制由系统底层推导比率公式，绝不采信表头错位数据
+        pr_l = (rev_l / u_l) if u_l > 0 else get_val(row, b_l, 'price')
+        pr_p = (rev_p / u_p) if u_p > 0 else get_val(row, b_p, 'price')
+        
+        cv_l = (u_l / gv_l) if gv_l > 0 else 0.0
+        cv_p = (u_p / gv_p) if gv_p > 0 else 0.0
+        
+        # 彻底修复 TACOS 计算: SPSD Spend / Ordered Revenue
+        tc_l = (sp_l / rev_l) if rev_l > 0 else 0.0
+        tc_p = (sp_p / rev_p) if rev_p > 0 else 0.0
+        
+        hist_units = [get_val(row, date_blocks[d], 'units') for d in sorted_dates[:30] if 'units' in date_blocks[d]]
         l30d_avg = np.mean(hist_units) if hist_units else 0.0
         
         avg_sales = (u_p + u_l) / 2
         sales_change = u_l - u_p
         tier, reason = get_alert_tier_info(avg_sales, sales_change, u_p, u_l, l30d_avg)
-        
-        rev_impact = sales_change * pr_l
-        impact_pct = (rev_impact / rev_p * 100) if rev_p > 0 else 0.0
-        fmt_impact = f"{'+' if rev_impact >= 0 else ''}${rev_impact:,.2f} ({'+' if impact_pct >= 0 else ''}{impact_pct:.1f}%)"
         
         driving = build_driving_factors_text(sales_change, gv_l - gv_p, pr_l - pr_p, cv_l - cv_p, sp_l - sp_p, tc_l - tc_p)
         
@@ -197,8 +196,8 @@ def load_and_parse_data(file_bytes, file_name):
             'Retail Status': str(row.iloc[idx_map['status']]).strip(),
             'L30D销量均值': l30d_avg, 'units_p': u_p, 'units_l': u_l, 'gv_p': gv_p, 'gv_l': gv_l, 'price_p': pr_p, 'price_l': pr_l,
             'cvr_p': cv_p, 'cvr_l': cv_l, 'spsd_p': sp_p, 'spsd_l': sp_l, 'sbdsp_p': sb_p, 'sbdsp_l': sb_l, 'tacos_p': tc_p, 'tacos_l': tc_l,
-            'Revenue_Impact': fmt_impact, '影响级别': get_revenue_impact_level(rev_impact), '预警层级': tier if tier else '无预警', '预警原因': reason, '波动驱动因素': driving,
-            'raw_row_data': row, 'rev_p': rev_p, 'rev_l': u_l * pr_l
+            '预警层级': tier if tier else '无预警', '预警原因': reason, '波动驱动因素': driving,
+            'raw_row_data': row, 'rev_p': rev_p, 'rev_l': rev_l
         })
         
     df_child_master_cached = pd.DataFrame(child_list)
@@ -269,7 +268,7 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
         selected_cats = st.sidebar.multiselect("📁 筛选 Category", options=cat_options)
         selected_subcats = st.sidebar.multiselect("📂 筛选 Subcategory", options=subcat_options)
         
-        # 执行交叉过滤
+        # 执行过滤
         if selected_oms: df_child_master = df_child_master[df_child_master['OM'].astype(str).isin(selected_oms)]
         if selected_patterns: df_child_master = df_child_master[df_child_master['Pattern'].astype(str).isin(selected_patterns)]
         if selected_buckets: df_child_master = df_child_master[df_child_master['BucketsList'].astype(str).isin(selected_buckets)]
@@ -285,14 +284,12 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
         s2_s3_rows = []
         for idx, r in df_child_master.iterrows():
             s2_s3_rows.append({
-                # --- 产品基础信息 (严格15字段) ---
                 'Parent ASIN': r['Parent ASIN'], 'ASIN': r['ASIN'], 'ItemNo': r['ItemNo'], 'Division': r['Division'], 
                 'Brand': r['Brand'], 'Category': r['Category'], 'Subcategory': r['Subcategory'], 'Pattern': r['Pattern'], 
                 'Color': r['Color'], 'Size': r['Size'], 'OM': r['OM'], 'BucketsList': r['BucketsList'], 
                 'ClassificationCode': r['ClassificationCode'], 'ProductTag': r['ProductTag'], 'Retail Status': r['Retail Status'],
-                # --- 核心指标信息 ---
                 'L30D销量均值': int(r['L30D销量均值']),
-                '预警层级': r['预警层级'], '影响级别': r['影响级别'], 'Revenue_Impact': r['Revenue_Impact'],
+                '预警层级': r['预警层级'],
                 '销量_D1': int(r['units_p']), '销量_D2': int(r['units_l']), '销量变化': int(r['units_l'] - r['units_p']), '销量变化率': (r['units_l'] - r['units_p'])/r['units_p'] if r['units_p'] > 0 else 0.0, '销量趋势': get_trend_symbol(r['units_l'], r['units_p']),
                 'GV_D1': int(r['gv_p']), 'GV_D2': int(r['gv_l']), 'GV变化': int(r['gv_l'] - r['gv_p']), 'GV变化率': (r['gv_l'] - r['gv_p'])/r['gv_p'] if r['gv_p'] > 0 else 0.0, 'GV趋势': get_trend_symbol(r['gv_l'], r['gv_p']),
                 '价格_D1': r['price_p'], '价格_D2': r['price_l'], '价格变化': r['price_l'] - r['price_p'], '价格变化率': (r['price_l'] - r['price_p'])/r['price_p'] if r['price_p'] > 0 else 0.0, '价格趋势': get_trend_symbol(r['price_l'], r['price_p']),
@@ -334,19 +331,13 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
             
             p_change = u_l - u_p
             p_tier, p_reason = get_alert_tier_info((u_p+u_l)/2, p_change, u_p, u_l, row['L30D销量均值'])
-            p_impact = p_change * pr_l
-            p_impact_pct = (p_impact / rev_p * 100) if rev_p > 0 else 0.0
-            fmt_p_impact = f"{'+' if p_impact >= 0 else ''}${p_impact:,.2f} ({'+' if p_impact_pct >= 0 else ''}{p_impact_pct:.1f}%)"
             
             parent_list.append({
-                # --- 产品基础信息 (严格11字段) ---
                 'Parent ASIN': row['Parent ASIN'], 'ASIN Count': int(row['ASIN']), 'Division': row['Division'], 
                 'Brand': row['Brand'], 'Category': row['Category'], 'Subcategory': row['Subcategory'], 
                 'Pattern': row['Pattern'], 'OM': row['OM'], 'BucketsList': row['BucketsList'], 'ProductTag': row['ProductTag'],
-                'Retail Status': row['Retail Status'], 
-                # --- 核心指标信息 ---
-                'L30D销量均值': int(row['L30D销量均值']),
-                '预警层级': p_tier if p_tier else '无预警', '影响级别': get_revenue_impact_level(p_impact), 'Revenue_Impact': fmt_p_impact, 
+                'Retail Status': row['Retail Status'], 'L30D销量均值': int(row['L30D销量均值']),
+                '预警层级': p_tier if p_tier else '无预警',
                 '销量_D1': int(u_p), '销量_D2': int(u_l), '销量变化': int(p_change), '销量变化率': p_change/u_p if u_p > 0 else 0.0, '销量趋势': get_trend_symbol(u_l, u_p),
                 'GV_D1': int(gv_p), 'GV_D2': int(gv_l), 'GV变化': int(gv_l - gv_p), 'GV变化率': (gv_l - gv_p)/gv_p if gv_p > 0 else 0.0, 'GV趋势': get_trend_symbol(gv_l, gv_p),
                 '价格_D1': pr_p, '价格_D2': pr_l, '价格变化': pr_l - pr_p, '价格变化率': (pr_l - pr_p)/pr_p if pr_p > 0 else 0.0, '价格趋势': get_trend_symbol(pr_l, pr_p),
@@ -376,22 +367,24 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                         b = date_blocks[d]
                         for _, cr in children.iterrows():
                             r = cr['raw_row_data']
-                            w2_units += safe_float(r.iloc[b['units']])
-                            w2_gv += safe_float(r.iloc[b.get('gv', b['units'])])
-                            w2_rev += safe_float(r.iloc[b.get('revenue', b['units'])])
-                            w2_sp += safe_float(r.iloc[b.get('spsd', b['units'])])
-                            w2_sb += safe_float(r.iloc[b.get('sbdsp', b['units'])])
+                            def get_v(block, key): return safe_float(r.iloc[block[key]]) if key in block else 0.0
+                            w2_units += get_v(b, 'units')
+                            w2_gv += get_v(b, 'gv')
+                            w2_rev += get_v(b, 'revenue')
+                            w2_sp += get_v(b, 'spsd')
+                            w2_sb += get_v(b, 'sbdsp')
                             
                 for d in w1_days:
                     if d in date_blocks:
                         b = date_blocks[d]
                         for _, cr in children.iterrows():
                             r = cr['raw_row_data']
-                            w1_units += safe_float(r.iloc[b['units']])
-                            w1_gv += safe_float(r.iloc[b.get('gv', b['units'])])
-                            w1_rev += safe_float(r.iloc[b.get('revenue', b['units'])])
-                            w1_sp += safe_float(r.iloc[b.get('spsd', b['units'])])
-                            w1_sb += safe_float(r.iloc[b.get('sbdsp', b['units'])])
+                            def get_v(block, key): return safe_float(r.iloc[block[key]]) if key in block else 0.0
+                            w1_units += get_v(b, 'units')
+                            w1_gv += get_v(b, 'gv')
+                            w1_rev += get_v(b, 'revenue')
+                            w1_sp += get_v(b, 'spsd')
+                            w1_sb += get_v(b, 'sbdsp')
                             
                 w1_price = (w1_rev / w1_units) if w1_units > 0 else 0.0
                 w2_price = (w2_rev / w2_units) if w2_units > 0 else 0.0
@@ -404,16 +397,11 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                 w_pct = (w_units_diff / w1_units) if w1_units > 0 else 0.0
                 w_alert = '🔴 周销量暴跌' if (w_pct <= -0.30 and w1_units > 20) else ('🚀 周销量暴涨' if w_pct >= 0.30 else '正常')
                 
-                w_impact = w_units_diff * w2_price
-                w_impact_pct = (w_impact / w1_rev * 100) if w1_rev > 0 else 0.0
-                fmt_w_impact = f"{'+' if w_impact >= 0 else ''}${w_impact:,.2f} ({'+' if w_impact_pct >= 0 else ''}{w_impact_pct:.1f}%)"
-                
                 s6_records.append({
-                    # --- 严格对齐字段 ---
                     'Parent ASIN': p_asin, 'ASIN Count': int(p_row['ASIN']), 'Division': p_row['Division'], 'Brand': p_row['Brand'],
                     'Category': p_row['Category'], 'Subcategory': p_row['Subcategory'], 'Pattern': p_row['Pattern'], 'OM': p_row['OM'],
                     'BucketsList': p_row['BucketsList'], 'ProductTag': p_row['ProductTag'], 'Retail Status': p_row['Retail Status'],
-                    '预警层级': w_alert, '影响级别': get_revenue_impact_level(w_impact), 'Revenue_Impact': fmt_w_impact,
+                    '预警层级': w_alert, 
                     '销量_W1': int(w1_units), '销量_W2': int(w2_units), '销量变化': int(w_units_diff), '销量变化率': w_pct, '销量趋势': get_trend_symbol(w2_units, w1_units),
                     'GV_W1': int(w1_gv), 'GV_W2': int(w2_gv), 'GV变化': int(w2_gv - w1_gv), 'GV变化率': (w2_gv - w1_gv)/w1_gv if w1_gv > 0 else 0.0, 'GV趋势': get_trend_symbol(w2_gv, w1_gv),
                     '价格_W1': w1_price, '价格_W2': w2_price, '价格变化': w2_price - w1_price, '价格变化率': (w2_price - w1_price)/w1_price if w1_price > 0 else 0.0, '价格趋势': get_trend_symbol(w2_price, w1_price),
@@ -430,7 +418,7 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
         else:
             df_s6_top50 = pd.DataFrame([{'提示': '历史数据不足14天，周环比隐藏'}])
 
-        # ==================== 🎨 样式渲染引擎 (修复了双 Rank Bug) ====================
+        # ==================== 🎨 样式渲染引擎 ====================
         def apply_matrix_styles(df):
             def fmt_arrow(v):
                 if pd.isna(v): return "0"
@@ -481,8 +469,6 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                             else:
                                 colors[i] += 'color: #00B050; font-weight: bold;' if v > 0 else 'color: #FF0000; font-weight: bold;'
                 return colors
-            
-            # 【核心修正】：加入 .hide(axis='index') 强制隐藏 Pandas 自带空白行号，只保留你专属的 Rank
             return df.style.hide(axis='index').apply(row_painter, axis=1).format(fmt_dict)
 
         styler_s2 = apply_matrix_styles(df_top50_s2)
@@ -551,30 +537,21 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                 * 自动剔除部门代号 (`Division`) 为 *FUR, LGT, ART, APL, PET, PETB* 的非核心业务家具宠物线。
                 * 自动过滤 `OM` 标记为 *discontinued* 的产品。
                 """)
-                st.warning("""
-                **三、Revenue Impact 营收震荡系数级别定义**
-                * 计算公式：`销量每日净波动 × 昨日单价`
-                * **S级影响**：单日震荡金额绝对值 ≥ $5000 (战略级波动)
-                * **A级影响**：$1000 - $5000 (高震荡)
-                * **B级影响**：$500 - $1000 (中等异动)
-                * **C级影响**：$100 - $500 (低度异动)
-                """)
             with c_inf2:
                 st.success("""
-                **四、CVR 转化率矩阵良性/恶性走势诊断**
+                **三、CVR 转化率矩阵良性/恶性走势诊断**
                 * 🟢 良性：`CVR ↑ + 销量 ↑` ➔ 关键词排名自然破圈，流量高度匹配。
                 * 🟡 监控：`CVR ↓ + 销量 ↑` ➔ 处于降价、大促清仓阶段，需严防毛利穿底。
                 * 🔴 警戒：`CVR ↓ + 销量 ↓` ➔ 产品转化核心爆雷、或遭遇海量差评，须立即抢修 Listing！
                 """)
                 st.error("""
-                **五、TACOS (总广告开销占销售额比) 毛利警示线**
-                * 计算公式：`SPSD广告费 / Total Revenue × 100%`
+                **四、TACOS (总广告开销占销售额比) 毛利警示线**
+                * 计算公式：`SPSD广告费 / Ordered Revenue × 100%`
                 * 🟢 优异效率：TACOS < 2%
                 * 🟡 正常开销：2% ≤ TACOS < 5%
                 * 🔴 亟需调价：TACOS ≥ 5%（广告疯狂烧钱空转，建议立刻降CPC或限流）
                 """)
 
-        # 【核心修正】：网页端展示时，也加上 hide_index=True 彻底隐藏空白行号
         with tabs[1]: st.dataframe(styler_s2, use_container_width=True, height=550, hide_index=True)
         with tabs[2]: st.dataframe(styler_s3, use_container_width=True, height=550, hide_index=True)
         with tabs[3]: st.dataframe(styler_s4, use_container_width=True, height=550, hide_index=True)
