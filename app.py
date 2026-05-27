@@ -55,7 +55,7 @@ def build_driving_factors_text(s_chg, g_chg, p_chg, c_chg, sp_chg, tc_chg):
     def sym(c): return '↑' if c > 0 else ('↓' if c < 0 else '→')
     return f"销量{sym(s_chg)} GV{sym(g_chg)} 价格{sym(p_chg)} CVR{sym(c_chg)} SPSD{sym(sp_chg)} TACOS{sym(tc_chg)}"
 
-# ==================== 🚀 核心更新：POS 数据读取缓存引擎 ====================
+# ==================== 🚀 核心更新：带智能表头探查的 POS 读取引擎 ====================
 @st.cache_data(show_spinner=False)
 def load_and_parse_data(file_bytes, file_name):
     if file_name.endswith('.csv'):
@@ -68,6 +68,31 @@ def load_and_parse_data(file_bytes, file_name):
     date_row = raw_df.iloc[0, :]
     sub_header_row = raw_df.iloc[1, :]
     
+    # 🌟 智能表头定位 (彻底杜绝错行乱码)
+    meta_headers = [str(x).strip().lower() for x in sub_header_row[:30]]
+    idx_map = {
+        'parent': 0, 'asin': 1, 'item_no': 2, 'division': 3, 'brand': 4,
+        'category': 5, 'subcat': 6, 'pattern': 7, 'color': 8, 'size': 9,
+        'om': 11, 'buckets': 12, 'class_code': 13, 'tag': 15, 'status': 18
+    }
+    
+    for i, h in enumerate(meta_headers):
+        if 'parent' in h and 'asin' in h: idx_map['parent'] = i
+        elif h == 'asin': idx_map['asin'] = i
+        elif 'item' in h: idx_map['item_no'] = i
+        elif 'division' in h: idx_map['division'] = i
+        elif 'brand' in h: idx_map['brand'] = i
+        elif 'category' in h and 'sub' not in h: idx_map['category'] = i
+        elif 'subcategory' in h or 'sub category' in h: idx_map['subcat'] = i
+        elif 'pattern' in h: idx_map['pattern'] = i
+        elif 'color' in h: idx_map['color'] = i
+        elif 'size' in h: idx_map['size'] = i
+        elif h == 'om': idx_map['om'] = i
+        elif 'buckets' in h or 'bucket' in h: idx_map['buckets'] = i
+        elif 'class' in h and 'code' in h: idx_map['class_code'] = i
+        elif 'tag' in h or 'producttag' in h: idx_map['tag'] = i
+        elif 'status' in h or 'retail status' in h: idx_map['status'] = i
+
     date_blocks = {}
     unique_dates = []
     current_date = None
@@ -104,11 +129,11 @@ def load_and_parse_data(file_bytes, file_name):
     
     cleaned_rows = []
     for idx, row in raw_df.iloc[2:].iterrows():
-        parent_asin = str(row.iloc[0]).strip()
-        asin = str(row.iloc[1]).strip()
-        division = str(row.iloc[3]).strip()
-        om = str(row.iloc[11]).strip()
-        retail_status = str(row.iloc[18]).strip().lower()
+        parent_asin = str(row.iloc[idx_map['parent']]).strip()
+        asin = str(row.iloc[idx_map['asin']]).strip()
+        division = str(row.iloc[idx_map['division']]).strip()
+        om = str(row.iloc[idx_map['om']]).strip()
+        retail_status = str(row.iloc[idx_map['status']]).strip().lower()
         
         if parent_asin.lower() in ['total', '总计', 'nan', '']: continue
         if asin.lower() in ['total', '总计', 'nan', '', 'asin']: continue
@@ -155,12 +180,21 @@ def load_and_parse_data(file_bytes, file_name):
         driving = build_driving_factors_text(sales_change, gv_l - gv_p, pr_l - pr_p, cv_l - cv_p, sp_l - sp_p, tc_l - tc_p)
         
         child_list.append({
-            'Parent ASIN': str(row.iloc[0]).strip(), 'ASIN': str(row.iloc[1]).strip(), 'ItemNo': str(row.iloc[2]).strip(), 
-            'Division': str(row.iloc[3]).strip(), 'Brand': str(row.iloc[4]).strip(),
-            'Category': str(row.iloc[5]).strip(), 'Subcategory': str(row.iloc[6]).strip(), 
-            'Pattern': str(row.iloc[7]).strip(), 'Color': str(row.iloc[8]).strip(), 'Size': str(row.iloc[9]).strip(),
-            'OM': str(row.iloc[11]).strip(), 'BucketsList': str(row.iloc[12]).strip(), 
-            'ClassificationCode': str(row.iloc[13]).strip(), 'ProductTag': str(row.iloc[15]).strip(), 'Retail Status': str(row.iloc[18]).strip(),
+            'Parent ASIN': str(row.iloc[idx_map['parent']]).strip(),
+            'ASIN': str(row.iloc[idx_map['asin']]).strip(),
+            'ItemNo': str(row.iloc[idx_map['item_no']]).strip(),
+            'Division': str(row.iloc[idx_map['division']]).strip(),
+            'Brand': str(row.iloc[idx_map['brand']]).strip(),
+            'Category': str(row.iloc[idx_map['category']]).strip(),
+            'Subcategory': str(row.iloc[idx_map['subcat']]).strip(),
+            'Pattern': str(row.iloc[idx_map['pattern']]).strip(),
+            'Color': str(row.iloc[idx_map['color']]).strip(),
+            'Size': str(row.iloc[idx_map['size']]).strip(),
+            'OM': str(row.iloc[idx_map['om']]).strip(),
+            'BucketsList': str(row.iloc[idx_map['buckets']]).strip(),
+            'ClassificationCode': str(row.iloc[idx_map['class_code']]).strip(),
+            'ProductTag': str(row.iloc[idx_map['tag']]).strip(),
+            'Retail Status': str(row.iloc[idx_map['status']]).strip(),
             'L30D销量均值': l30d_avg, 'units_p': u_p, 'units_l': u_l, 'gv_p': gv_p, 'gv_l': gv_l, 'price_p': pr_p, 'price_l': pr_l,
             'cvr_p': cv_p, 'cvr_l': cv_l, 'spsd_p': sp_p, 'spsd_l': sp_l, 'sbdsp_p': sb_p, 'sbdsp_l': sb_l, 'tacos_p': tc_p, 'tacos_l': tc_l,
             'Revenue_Impact': fmt_impact, '影响级别': get_revenue_impact_level(rev_impact), '预警层级': tier if tier else '无预警', '预警原因': reason, '波动驱动因素': driving,
@@ -235,7 +269,7 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
         selected_cats = st.sidebar.multiselect("📁 筛选 Category", options=cat_options)
         selected_subcats = st.sidebar.multiselect("📂 筛选 Subcategory", options=subcat_options)
         
-        # 执行过滤
+        # 执行交叉过滤
         if selected_oms: df_child_master = df_child_master[df_child_master['OM'].astype(str).isin(selected_oms)]
         if selected_patterns: df_child_master = df_child_master[df_child_master['Pattern'].astype(str).isin(selected_patterns)]
         if selected_buckets: df_child_master = df_child_master[df_child_master['BucketsList'].astype(str).isin(selected_buckets)]
@@ -255,9 +289,9 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                 'Parent ASIN': r['Parent ASIN'], 'ASIN': r['ASIN'], 'ItemNo': r['ItemNo'], 'Division': r['Division'], 
                 'Brand': r['Brand'], 'Category': r['Category'], 'Subcategory': r['Subcategory'], 'Pattern': r['Pattern'], 
                 'Color': r['Color'], 'Size': r['Size'], 'OM': r['OM'], 'BucketsList': r['BucketsList'], 
-                'ClassificationCode': r['ClassificationCode'], 'ProductTag': r['ProductTag'],
+                'ClassificationCode': r['ClassificationCode'], 'ProductTag': r['ProductTag'], 'Retail Status': r['Retail Status'],
                 # --- 核心指标信息 ---
-                'Retail Status': r['Retail Status'], 'L30D销量均值': int(r['L30D销量均值']),
+                'L30D销量均值': int(r['L30D销量均值']),
                 '预警层级': r['预警层级'], '影响级别': r['影响级别'], 'Revenue_Impact': r['Revenue_Impact'],
                 '销量_D1': int(r['units_p']), '销量_D2': int(r['units_l']), '销量变化': int(r['units_l'] - r['units_p']), '销量变化率': (r['units_l'] - r['units_p'])/r['units_p'] if r['units_p'] > 0 else 0.0, '销量趋势': get_trend_symbol(r['units_l'], r['units_p']),
                 'GV_D1': int(r['gv_p']), 'GV_D2': int(r['gv_l']), 'GV变化': int(r['gv_l'] - r['gv_p']), 'GV变化率': (r['gv_l'] - r['gv_p'])/r['gv_p'] if r['gv_p'] > 0 else 0.0, 'GV趋势': get_trend_symbol(r['gv_l'], r['gv_p']),
@@ -309,8 +343,9 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                 'Parent ASIN': row['Parent ASIN'], 'ASIN Count': int(row['ASIN']), 'Division': row['Division'], 
                 'Brand': row['Brand'], 'Category': row['Category'], 'Subcategory': row['Subcategory'], 
                 'Pattern': row['Pattern'], 'OM': row['OM'], 'BucketsList': row['BucketsList'], 'ProductTag': row['ProductTag'],
+                'Retail Status': row['Retail Status'], 
                 # --- 核心指标信息 ---
-                'Retail Status': row['Retail Status'], 'L30D销量均值': int(row['L30D销量均值']),
+                'L30D销量均值': int(row['L30D销量均值']),
                 '预警层级': p_tier if p_tier else '无预警', '影响级别': get_revenue_impact_level(p_impact), 'Revenue_Impact': fmt_p_impact, 
                 '销量_D1': int(u_p), '销量_D2': int(u_l), '销量变化': int(p_change), '销量变化率': p_change/u_p if u_p > 0 else 0.0, '销量趋势': get_trend_symbol(u_l, u_p),
                 'GV_D1': int(gv_p), 'GV_D2': int(gv_l), 'GV变化': int(gv_l - gv_p), 'GV变化率': (gv_l - gv_p)/gv_p if gv_p > 0 else 0.0, 'GV趋势': get_trend_symbol(gv_l, gv_p),
@@ -395,7 +430,7 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
         else:
             df_s6_top50 = pd.DataFrame([{'提示': '历史数据不足14天，周环比隐藏'}])
 
-        # ==================== 🎨 样式渲染引擎 ====================
+        # ==================== 🎨 样式渲染引擎 (修复了双 Rank Bug) ====================
         def apply_matrix_styles(df):
             def fmt_arrow(v):
                 if pd.isna(v): return "0"
@@ -446,7 +481,9 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                             else:
                                 colors[i] += 'color: #00B050; font-weight: bold;' if v > 0 else 'color: #FF0000; font-weight: bold;'
                 return colors
-            return df.style.apply(row_painter, axis=1).format(fmt_dict)
+            
+            # 【核心修正】：加入 .hide(axis='index') 强制隐藏 Pandas 自带空白行号，只保留你专属的 Rank
+            return df.style.hide(axis='index').apply(row_painter, axis=1).format(fmt_dict)
 
         styler_s2 = apply_matrix_styles(df_top50_s2)
         styler_s3 = apply_matrix_styles(df_s3_alert)
@@ -537,13 +574,14 @@ with st.spinner('🔥 正在从云端加载 POS 基础数据并执行预警算�
                 * 🔴 亟需调价：TACOS ≥ 5%（广告疯狂烧钱空转，建议立刻降CPC或限流）
                 """)
 
-        with tabs[1]: st.dataframe(styler_s2, use_container_width=True, height=550)
-        with tabs[2]: st.dataframe(styler_s3, use_container_width=True, height=550)
-        with tabs[3]: st.dataframe(styler_s4, use_container_width=True, height=550)
-        with tabs[4]: st.dataframe(styler_s5, use_container_width=True, height=550)
+        # 【核心修正】：网页端展示时，也加上 hide_index=True 彻底隐藏空白行号
+        with tabs[1]: st.dataframe(styler_s2, use_container_width=True, height=550, hide_index=True)
+        with tabs[2]: st.dataframe(styler_s3, use_container_width=True, height=550, hide_index=True)
+        with tabs[3]: st.dataframe(styler_s4, use_container_width=True, height=550, hide_index=True)
+        with tabs[4]: st.dataframe(styler_s5, use_container_width=True, height=550, hide_index=True)
         with tabs[5]: 
             if '提示' in df_s6_top50.columns: st.info("历史横向数据天数不足 14 天，周滚动环比自动隐藏。")
-            else: st.dataframe(styler_s6, use_container_width=True, height=550)
+            else: st.dataframe(styler_s6, use_container_width=True, height=550, hide_index=True)
 
     except Exception as e:
         st.error(f"💥 发生运算错误：{e}")
